@@ -95,7 +95,7 @@ function transformLuaTupleDestructure(
 					lua.list.push(ids, lua.emptyId());
 				} else {
 					if (element.dotDotDotToken) {
-						state.addDiagnostic(diagnostics.noSpreadDestructuring(element));
+						state.addDiagnostic(diagnostics.noNonArraySpreadDestructuring(element));
 						return;
 					}
 					if (ts.isIdentifier(element.name)) {

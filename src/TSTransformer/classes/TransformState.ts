@@ -1,5 +1,6 @@
 import ts from "byots";
 import * as lua from "LuaAST";
+import { visualizeAST } from "LuaAST";
 import { PathTranslator } from "Shared/classes/PathTranslator";
 import { RbxPath, RojoConfig } from "Shared/classes/RojoConfig";
 import { ProjectType } from "Shared/constants";
@@ -10,6 +11,7 @@ import { GlobalSymbols, MacroManager, MultiTransformState, RoactSymbolManager } 
 import { createGetService } from "TSTransformer/util/createGetService";
 import { getModuleAncestor, skipUpwards } from "TSTransformer/util/traversal";
 import originalTS from "typescript";
+import { render, RenderState } from "LuaRenderer";
 
 /**
  * The ID of the Runtime library.
@@ -33,6 +35,14 @@ export class TransformState {
 
 	public addDiagnostic(diagnostic: ts.Diagnostic) {
 		this.diagnostics.push(diagnostic);
+	}
+
+	public debugAST(ast: lua.Node | undefined) {
+		if (ast) {
+			return render(new RenderState(), ast)
+				.replace(/\n/g, " ")
+				.trim();
+		}
 	}
 
 	constructor(
@@ -166,8 +176,8 @@ export class TransformState {
 	/**
 	 * Returns the expression and prerequisite statements created by `callback`.
 	 */
-	public capture(callback: () => lua.Expression) {
-		let expression!: lua.Expression;
+	public capture<T extends lua.Expression>(callback: () => T) {
+		let expression!: T;
 		const statements = this.capturePrereqs(() => (expression = callback()));
 		return { expression, statements };
 	}

@@ -35,7 +35,7 @@ function transformLuaTupleDestructure(
 			if (ts.isOmittedExpression(element)) {
 				lua.list.push(writes, lua.emptyId());
 			} else if (ts.isSpreadElement(element)) {
-				state.addDiagnostic(diagnostics.noSpreadDestructuring(element));
+				state.addDiagnostic(diagnostics.noNonArraySpreadDestructuring(element));
 			} else {
 				let initializer: ts.Expression | undefined;
 				if (ts.isBinaryExpression(element)) {

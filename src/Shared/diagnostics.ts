@@ -87,7 +87,12 @@ export const diagnostics = {
 	noComma: diagnostic("operator `,` is not supported!"),
 	noEnumMerging: diagnostic("Enum merging is not supported!"),
 	noNamespaceMerging: diagnostic("Namespace merging is not supported!"),
-	noSpreadDestructuring: diagnostic("Operator `...` is not supported for destructuring!"),
+
+	noNonArraySpreadDestructuring: diagnostic("Operator `...` is only supported for array types!"),
+	noSpreadDestructuringObjectInArray: diagnostic(
+		"Operator `...` is not supported for object destructuring inside of array destructuring!",
+	),
+
 	noFunctionExpressionName: diagnostic("Function expression names are not supported!"),
 	noPrecedingSpreadElement: diagnostic("Spread element must come last in a list of arguments!"),
 	noDestructureAssignmentExpression: diagnostic(

@@ -2,6 +2,7 @@ import ts from "byots";
 import * as lua from "LuaAST";
 import { assert } from "Shared/util/assert";
 import { TransformState } from "TSTransformer";
+import { offset } from "TSTransformer/util/offset";
 import {
 	getTypeArguments,
 	isArrayType,
@@ -11,7 +12,6 @@ import {
 	isIterableFunctionType,
 	isLuaTupleType,
 	isMapType,
-	isObjectType,
 	isSetType,
 	isStringType,
 } from "TSTransformer/util/types";
@@ -19,23 +19,24 @@ import {
 type BindingAccessor = (
 	state: TransformState,
 	parentId: lua.AnyIdentifier,
-	index: number,
+	indexExp: lua.Expression,
 	idStack: Array<lua.AnyIdentifier>,
 	isOmitted: boolean,
+	doNotPush: boolean,
 ) => lua.Expression;
 
 function peek<T>(array: Array<T>): T | undefined {
 	return array[array.length - 1];
 }
 
-const arrayAccessor: BindingAccessor = (state, parentId, index, idStack, isOmitted) => {
+const arrayAccessor: BindingAccessor = (state, parentId, index, idStack, isOmitted, doNotPush) => {
 	return lua.create(lua.SyntaxKind.ComputedIndexExpression, {
 		expression: parentId,
-		index: lua.number(index + 1),
+		index: offset(index, 1),
 	});
 };
 
-const stringAccessor: BindingAccessor = (state, parentId, index, idStack, isOmitted) => {
+const stringAccessor: BindingAccessor = (state, parentId, index, idStack, isOmitted, doNotPush) => {
 	let id: lua.AnyIdentifier;
 	if (idStack.length === 0) {
 		id = state.pushToVar(
@@ -66,7 +67,7 @@ const stringAccessor: BindingAccessor = (state, parentId, index, idStack, isOmit
 	}
 };
 
-const setAccessor: BindingAccessor = (state, parentId, index, idStack, isOmitted) => {
+const setAccessor: BindingAccessor = (state, parentId, index, idStack, isOmitted, doNotPush) => {
 	const args = lua.list.make<lua.Expression>(parentId);
 	const lastId = peek(idStack);
 	if (lastId) {
@@ -76,43 +77,47 @@ const setAccessor: BindingAccessor = (state, parentId, index, idStack, isOmitted
 		expression: lua.globals.next,
 		args,
 	});
-	if (isOmitted) {
-		state.prereq(
-			lua.create(lua.SyntaxKind.CallStatement, {
-				expression: callExp,
-			}),
-		);
-		return lua.emptyId();
-	} else {
-		const id = state.pushToVar(callExp);
-		idStack.push(id);
-		return id;
+
+	if (doNotPush) {
+		return callExp;
 	}
+
+	const id = state.pushToVar(callExp);
+	idStack.push(id);
+	return id;
 };
 
-const mapAccessor: BindingAccessor = (state, parentId, index, idStack, isOmitted) => {
+const mapAccessor: BindingAccessor = (state, parentId, index, idStack, isOmitted, doNotPush) => {
 	const args = lua.list.make<lua.Expression>(parentId);
 	const lastId = peek(idStack);
 	if (lastId) {
 		lua.list.push(args, lastId);
 	}
+
+	const callExp = lua.create(lua.SyntaxKind.CallExpression, {
+		expression: lua.globals.next,
+		args,
+	});
+
+	if (doNotPush) {
+		return lua.create(lua.SyntaxKind.Array, { members: lua.list.make(callExp) });
+	}
+
 	const keyId = lua.tempId();
 	const valueId = lua.tempId();
 	const ids = lua.list.make(keyId, valueId);
+
 	state.prereq(
 		lua.create(lua.SyntaxKind.VariableDeclaration, {
 			left: ids,
-			right: lua.create(lua.SyntaxKind.CallExpression, {
-				expression: lua.globals.next,
-				args,
-			}),
+			right: callExp,
 		}),
 	);
 	idStack.push(keyId);
 	return lua.create(lua.SyntaxKind.Array, { members: ids });
 };
 
-const iterableFunctionTupleAccessor: BindingAccessor = (state, parentId, index, idStack, isOmitted) => {
+const iterableFunctionTupleAccessor: BindingAccessor = (state, parentId, index, idStack, isOmitted, doNotPush) => {
 	const callExp = lua.create(lua.SyntaxKind.CallExpression, {
 		expression: parentId,
 		args: lua.list.make(),
@@ -129,7 +134,7 @@ const iterableFunctionTupleAccessor: BindingAccessor = (state, parentId, index, 
 	}
 };
 
-const iterableFunctionAccessor: BindingAccessor = (state, parentId, index, idStack, isOmitted) => {
+const iterableFunctionAccessor: BindingAccessor = (state, parentId, index, idStack, isOmitted, doNotPush) => {
 	const callExp = lua.create(lua.SyntaxKind.CallExpression, {
 		expression: parentId,
 		args: lua.list.make(),
@@ -146,7 +151,7 @@ const iterableFunctionAccessor: BindingAccessor = (state, parentId, index, idSta
 	}
 };
 
-const firstDecrementedIterableAccessor: BindingAccessor = (state, parentId, index, idStack, isOmitted) => {
+const firstDecrementedIterableAccessor: BindingAccessor = (state, parentId, index, idStack, isOmitted, doNotPush) => {
 	const callExp = lua.create(lua.SyntaxKind.CallExpression, {
 		expression: parentId,
 		args: lua.list.make(),
@@ -171,7 +176,7 @@ const firstDecrementedIterableAccessor: BindingAccessor = (state, parentId, inde
 	}
 };
 
-const doubleDecrementedIteratorAccessor: BindingAccessor = (state, parentId, index, idStack, isOmitted) => {
+const doubleDecrementedIteratorAccessor: BindingAccessor = (state, parentId, index, idStack, isOmitted, doNotPush) => {
 	const callExp = lua.create(lua.SyntaxKind.CallExpression, {
 		expression: parentId,
 		args: lua.list.make(),
@@ -199,7 +204,7 @@ const doubleDecrementedIteratorAccessor: BindingAccessor = (state, parentId, ind
 	}
 };
 
-const iterAccessor: BindingAccessor = (state, parentId, index, idStack, isOmitted) => {
+const iterAccessor: BindingAccessor = (state, parentId, index, idStack, isOmitted, doNotPush) => {
 	const callExp = lua.create(lua.SyntaxKind.CallExpression, {
 		expression: lua.create(lua.SyntaxKind.PropertyAccessExpression, {
 			expression: parentId,
@@ -224,7 +229,6 @@ const iterAccessor: BindingAccessor = (state, parentId, index, idStack, isOmitte
 
 export function getAccessorForBindingType(
 	state: TransformState,
-	node: ts.Node,
 	type: ts.Type | ReadonlyArray<ts.Type>,
 ): BindingAccessor {
 	if (ts.isArray(type) || isArrayType(state, type)) {
@@ -243,8 +247,7 @@ export function getAccessorForBindingType(
 		return firstDecrementedIterableAccessor;
 	} else if (isDoubleDecrementedIterableFunctionType(state, type)) {
 		return doubleDecrementedIteratorAccessor;
-	} else if (isGeneratorType(state, type) || isObjectType(type) || ts.isThis(node)) {
-		// TODO super?
+	} else if (isGeneratorType(state, type)) {
 		return iterAccessor;
 	}
 	assert(false);
