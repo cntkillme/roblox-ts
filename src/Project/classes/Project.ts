@@ -51,104 +51,39 @@ export interface ProjectOptions {
 
 /** Represents a roblox-ts project. */
 export class Project {
+	public readonly tsConfigPath: string;
 	public readonly projectPath: string;
+	public readonly rojoConfigPath: string | undefined;
 	public readonly nodeModulesPath: string;
+
+	private program!: ts.EmitAndSemanticDiagnosticsBuilderProgram;
+	private typeChecker!: ts.TypeChecker;
+	private compilerOptions!: ts.CompilerOptions;
+	private globalSymbols!: GlobalSymbols;
+	private macroManager!: MacroManager;
+	private pathTranslator!: PathTranslator;
+	private rootDir!: string;
+	private roactSymbolManager: RoactSymbolManager | undefined;
 
 	private readonly verbose: boolean;
 	private readonly projectOptions: ProjectOptions;
-	private readonly program: ts.EmitAndSemanticDiagnosticsBuilderProgram;
-	private readonly compilerOptions: ts.CompilerOptions;
-	private readonly typeChecker: ts.TypeChecker;
-	private readonly globalSymbols: GlobalSymbols;
-	private readonly macroManager: MacroManager;
-	private readonly roactSymbolManager: RoactSymbolManager | undefined;
 	private readonly rojoConfig: RojoConfig;
-	private readonly pathTranslator: PathTranslator;
 	private readonly pkgVersion: string | undefined;
 	private readonly runtimeLibRbxPath: RbxPath | undefined;
 	private readonly nodeModulesRbxPath: RbxPath | undefined;
 	private readonly includePath: string;
-	private readonly rootDir: string;
 
 	public readonly projectType: ProjectType;
 
 	private readonly nodeModulesPathMapping = new Map<string, string>();
 
-	constructor(tsConfigPath: string, opts: Partial<ProjectOptions>, verbose: boolean) {
-		this.verbose = verbose;
-		this.projectOptions = Object.assign({}, DEFAULT_PROJECT_OPTIONS, opts);
-
-		// set up project paths
-		this.projectPath = path.dirname(tsConfigPath);
-
-		const pkgJsonPath = ts.findPackageJson(this.projectPath, (ts.sys as unknown) as ts.LanguageServiceHost);
-		if (!pkgJsonPath) {
-			throw new ProjectError("Unable to find package.json");
-		}
-
-		const pkgJson = JSON.parse(fs.readFileSync(pkgJsonPath).toString());
-		this.pkgVersion = pkgJson.version;
-
-		this.nodeModulesPath = path.join(path.dirname(pkgJsonPath), "node_modules", "@rbxts");
-
-		const rojoConfigPath = RojoConfig.findRojoConfigFilePath(this.projectPath, this.projectOptions.rojo);
-		if (rojoConfigPath) {
-			this.rojoConfig = RojoConfig.fromPath(rojoConfigPath);
-			if (this.rojoConfig.isGame()) {
-				this.projectType = ProjectType.Game;
-			} else {
-				this.projectType = ProjectType.Model;
-			}
-		} else {
-			this.rojoConfig = RojoConfig.synthetic(this.projectPath);
-			this.projectType = ProjectType.Package;
-		}
-
-		// intentionally use || here for empty string case
-		this.includePath = path.resolve(this.projectOptions.includePath || path.join(this.projectPath, "include"));
-
-		// validates and establishes runtime library
-		if (this.projectType !== ProjectType.Package) {
-			const runtimeFsPath = path.join(this.includePath, "RuntimeLib.lua");
-			const runtimeLibRbxPath = this.rojoConfig.getRbxPathFromFilePath(runtimeFsPath);
-			if (!runtimeLibRbxPath) {
-				throw new ProjectError(
-					`A Rojo project file was found ( ${path.relative(
-						this.projectPath,
-						rojoConfigPath!,
-					)} ), but contained no data for include folder!`,
-				);
-			} else if (this.rojoConfig.getNetworkType(runtimeLibRbxPath) !== NetworkType.Unknown) {
-				throw new ProjectError(`Runtime library cannot be in a server-only or client-only container!`);
-			} else if (this.rojoConfig.isIsolated(runtimeLibRbxPath)) {
-				throw new ProjectError(`Runtime library cannot be in an isolated container!`);
-			}
-			this.runtimeLibRbxPath = runtimeLibRbxPath;
-		}
-
-		if (fs.pathExistsSync(this.nodeModulesPath)) {
-			this.nodeModulesRbxPath = this.rojoConfig.getRbxPathFromFilePath(this.nodeModulesPath);
-
-			// map module paths
-			for (const pkgName of fs.readdirSync(this.nodeModulesPath)) {
-				const pkgPath = path.join(this.nodeModulesPath, pkgName);
-				const pkgJsonPath = path.join(pkgPath, "package.json");
-				if (fs.existsSync(pkgJsonPath)) {
-					const pkgJson = fs.readJSONSync(pkgJsonPath) as { main?: string; typings?: string; types?: string };
-					// both "types" and "typings" are valid
-					const typesPath = pkgJson.types ?? pkgJson.typings ?? "index.d.ts";
-					if (pkgJson.main) {
-						this.nodeModulesPathMapping.set(
-							path.resolve(pkgPath, typesPath),
-							path.resolve(pkgPath, pkgJson.main),
-						);
-					}
-				}
-			}
-		}
-
+	public reloadProgram() {
 		// obtain TypeScript command line options and validate
-		const parsedCommandLine = ts.getParsedCommandLineOfConfigFile(tsConfigPath, {}, createParseConfigFileHost());
+		const parsedCommandLine = ts.getParsedCommandLineOfConfigFile(
+			this.tsConfigPath,
+			{},
+			createParseConfigFileHost(),
+		);
 
 		if (parsedCommandLine === undefined) {
 			throw new ProjectError("Unable to load TS program!");
@@ -164,9 +99,9 @@ export class Project {
 		const host = ts.createIncrementalCompilerHost(this.compilerOptions);
 
 		let rojoHash = "";
-		if (rojoConfigPath) {
+		if (this.rojoConfigPath) {
 			assert(host.createHash);
-			rojoHash = "-" + host.createHash(fs.readFileSync(rojoConfigPath).toString());
+			rojoHash = "-" + host.createHash(fs.readFileSync(this.rojoConfigPath).toString());
 		}
 
 		// super hack!
@@ -203,6 +138,83 @@ export class Project {
 			ts.getTsBuildInfoEmitOutputFilePath(this.compilerOptions),
 			this.compilerOptions.declaration === true,
 		);
+	}
+
+	constructor(tsConfigPath: string, opts: Partial<ProjectOptions>, verbose: boolean) {
+		this.tsConfigPath = tsConfigPath;
+		this.verbose = verbose;
+		this.projectOptions = Object.assign({}, DEFAULT_PROJECT_OPTIONS, opts);
+
+		// set up project paths
+		this.projectPath = path.dirname(tsConfigPath);
+
+		const pkgJsonPath = ts.findPackageJson(this.projectPath, (ts.sys as unknown) as ts.LanguageServiceHost);
+		if (!pkgJsonPath) {
+			throw new ProjectError("Unable to find package.json");
+		}
+
+		const pkgJson = JSON.parse(fs.readFileSync(pkgJsonPath).toString());
+		this.pkgVersion = pkgJson.version;
+
+		this.nodeModulesPath = path.join(path.dirname(pkgJsonPath), "node_modules", "@rbxts");
+
+		this.rojoConfigPath = RojoConfig.findRojoConfigFilePath(this.projectPath, this.projectOptions.rojo);
+		if (this.rojoConfigPath) {
+			this.rojoConfig = RojoConfig.fromPath(this.rojoConfigPath);
+			if (this.rojoConfig.isGame()) {
+				this.projectType = ProjectType.Game;
+			} else {
+				this.projectType = ProjectType.Model;
+			}
+		} else {
+			this.rojoConfig = RojoConfig.synthetic(this.projectPath);
+			this.projectType = ProjectType.Package;
+		}
+
+		// intentionally use || here for empty string case
+		this.includePath = path.resolve(this.projectOptions.includePath || path.join(this.projectPath, "include"));
+
+		// validates and establishes runtime library
+		if (this.projectType !== ProjectType.Package) {
+			const runtimeFsPath = path.join(this.includePath, "RuntimeLib.lua");
+			const runtimeLibRbxPath = this.rojoConfig.getRbxPathFromFilePath(runtimeFsPath);
+			if (!runtimeLibRbxPath) {
+				throw new ProjectError(
+					`A Rojo project file was found ( ${path.relative(
+						this.projectPath,
+						this.rojoConfigPath!,
+					)} ), but contained no data for include folder!`,
+				);
+			} else if (this.rojoConfig.getNetworkType(runtimeLibRbxPath) !== NetworkType.Unknown) {
+				throw new ProjectError(`Runtime library cannot be in a server-only or client-only container!`);
+			} else if (this.rojoConfig.isIsolated(runtimeLibRbxPath)) {
+				throw new ProjectError(`Runtime library cannot be in an isolated container!`);
+			}
+			this.runtimeLibRbxPath = runtimeLibRbxPath;
+		}
+
+		if (fs.pathExistsSync(this.nodeModulesPath)) {
+			this.nodeModulesRbxPath = this.rojoConfig.getRbxPathFromFilePath(this.nodeModulesPath);
+
+			// map module paths
+			for (const pkgName of fs.readdirSync(this.nodeModulesPath)) {
+				const pkgPath = path.join(this.nodeModulesPath, pkgName);
+				const pkgJsonPath = path.join(pkgPath, "package.json");
+				if (fs.existsSync(pkgJsonPath)) {
+					const pkgJson = fs.readJSONSync(pkgJsonPath) as { main?: string; typings?: string; types?: string };
+					// both "types" and "typings" are valid
+					const typesPath = pkgJson.types ?? pkgJson.typings ?? "index.d.ts";
+					if (pkgJson.main) {
+						this.nodeModulesPathMapping.set(
+							path.resolve(pkgPath, typesPath),
+							path.resolve(pkgPath, pkgJson.main),
+						);
+					}
+				}
+			}
+		}
+
+		this.reloadProgram();
 	}
 
 	private isOutputFileOrphaned(filePath: string) {
@@ -282,7 +294,7 @@ export class Project {
 		return changedFilesSet;
 	}
 
-	private getRootDirs() {
+	public getRootDirs() {
 		const rootDirs = this.compilerOptions.rootDir ? [this.compilerOptions.rootDir] : this.compilerOptions.rootDirs;
 		assert(rootDirs);
 		return rootDirs;

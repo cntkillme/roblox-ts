@@ -6,12 +6,10 @@ export class LogService {
 		process.stdout.write(message);
 	}
 
-	static writeLine(...messages: Array<unknown>) {
+	static writeLine(message: string) {
 		if (this.partial) {
 			this.write("\n");
 		}
-		for (const message of messages) {
-			this.write(message + "\n");
-		}
+		this.write(message + "\n");
 	}
 }

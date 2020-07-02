@@ -1,11 +1,11 @@
 import ts from "byots";
+import chokidar from "chokidar";
 import { CLIError } from "CLI/errors/CLIError";
 import fs from "fs-extra";
 import path from "path";
 import { Project, ProjectOptions } from "Project";
 import { DiagnosticError } from "Shared/errors/DiagnosticError";
 import { ProjectError } from "Shared/errors/ProjectError";
-import { assert } from "Shared/util/assert";
 import yargs from "yargs";
 
 function getTsConfigProjectOptions(tsConfigPath?: string): Partial<ProjectOptions> | undefined {
@@ -21,6 +21,28 @@ interface CLIOptions {
 	project: string;
 	watch: boolean;
 	verbose: boolean;
+}
+
+const CHOKIDAR_OPTIONS: chokidar.WatchOptions = {
+	awaitWriteFinish: {
+		pollInterval: 10,
+		stabilityThreshold: 50,
+	},
+	ignoreInitial: true,
+	ignorePermissionErrors: true,
+};
+
+function handleErrors(callback: () => void) {
+	try {
+		callback();
+	} catch (e) {
+		// catch recognized errors
+		if (e instanceof ProjectError || e instanceof DiagnosticError) {
+			e.log();
+		} else {
+			throw e;
+		}
+	}
 }
 
 /**
@@ -76,23 +98,34 @@ export = ts.identity<yargs.CommandModule<{}, Partial<ProjectOptions> & CLIOption
 		const tsConfigProjectOptions = getTsConfigProjectOptions(tsConfigPath);
 		const projectOptions: Partial<ProjectOptions> = Object.assign({}, tsConfigProjectOptions, argv);
 
-		// if watch mode is enabled
-		if (argv.watch) {
-			assert(false, "Not implemented");
-		} else {
-			try {
-				// attempt to build the project
-				const project = new Project(tsConfigPath, projectOptions, argv.verbose);
+		handleErrors(() => {
+			const project = new Project(tsConfigPath!, projectOptions, argv.verbose);
+			if (argv.watch) {
+				let isBuilding = false;
+				let buildPending = false;
+
+				function build() {
+					if (isBuilding) {
+						buildPending = true;
+						return;
+					}
+
+					isBuilding = true;
+					buildPending = false;
+					handleErrors(() => {
+						project.reloadProgram();
+						project.cleanup();
+						project.compileAll();
+					});
+					isBuilding = false;
+				}
+
+				chokidar.watch(project.getRootDirs(), CHOKIDAR_OPTIONS).on("all", () => build());
+				build();
+			} else {
 				project.cleanup();
 				project.compileAll();
-			} catch (e) {
-				// catch recognized errors
-				if (e instanceof ProjectError || e instanceof DiagnosticError) {
-					e.log();
-				} else {
-					throw e;
-				}
 			}
-		}
+		});
 	},
 });
